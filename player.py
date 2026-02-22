@@ -5,13 +5,15 @@ import torch
 from typing import Optional
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
+from chess_tournament.players import Player
 
-class TransformerPlayer:
+
+class TransformerPlayer(Player):
     """
     Tiny LM baseline chess player.
 
-    Contract:
-        get_move(fen: str) -> Optional[str]
+    REQUIRED:
+        Subclasses chess_tournament.players.Player
     """
 
     UCI_REGEX = re.compile(r"\b([a-h][1-8][a-h][1-8][qrbn]?)\b", re.IGNORECASE)
@@ -23,7 +25,8 @@ class TransformerPlayer:
         temperature: float = 0.7,
         max_new_tokens: int = 8,
     ):
-        self.name = name
+        super().__init__(name)
+
         self.model_id = model_id
         self.temperature = temperature
         self.max_new_tokens = max_new_tokens
@@ -35,11 +38,11 @@ class TransformerPlayer:
         self.model = None
 
     # -------------------------
-    # Lazy loading (CRITICAL)
+    # Lazy loading
     # -------------------------
     def _load_model(self):
         if self.model is None:
-            print(f"[{self.name}] Loading model {self.model_id} on {self.device}...")
+            print(f"[{self.name}] Loading {self.model_id} on {self.device}...")
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
 
             if self.tokenizer.pad_token is None:
@@ -53,29 +56,14 @@ class TransformerPlayer:
     # Prompt
     # -------------------------
     def _build_prompt(self, fen: str) -> str:
-        return f"""You are a chess engine.
+        return f"FEN: {fen}\nMove:"
 
-Return ONE legal move in UCI format.
-
-FEN: {fen}
-Move:"""
-
-    # -------------------------
-    # Extract UCI move
-    # -------------------------
     def _extract_move(self, text: str) -> Optional[str]:
         match = self.UCI_REGEX.search(text)
         return match.group(1).lower() if match else None
 
-    # -------------------------
-    # Fallback
-    # -------------------------
     def _random_legal(self, fen: str) -> Optional[str]:
-        try:
-            board = chess.Board(fen)
-        except Exception:
-            return None
-
+        board = chess.Board(fen)
         moves = list(board.legal_moves)
         return random.choice(moves).uci() if moves else None
 
@@ -84,12 +72,15 @@ Move:"""
     # -------------------------
     def get_move(self, fen: str) -> Optional[str]:
 
-        self._load_model()
+        try:
+            self._load_model()
+        except Exception:
+            return self._random_legal(fen)
 
         prompt = self._build_prompt(fen)
 
         try:
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
 
             with torch.no_grad():
                 outputs = self.model.generate(
@@ -102,7 +93,6 @@ Move:"""
 
             decoded = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-            # Remove prompt if echoed
             if decoded.startswith(prompt):
                 decoded = decoded[len(prompt):]
 
@@ -114,5 +104,4 @@ Move:"""
         except Exception:
             pass
 
-        # Safe fallback if model fails
         return self._random_legal(fen)
